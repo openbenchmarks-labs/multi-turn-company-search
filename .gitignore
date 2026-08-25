@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Credentials
+.env
+.env.local
+
+# Local paid-run output and logs
+runs/
+*.log
+
+# Editor / OS
+.DS_Store
+*.swp
+.idea/
+.vscode/
