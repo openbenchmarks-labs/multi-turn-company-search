@@ -1,86 +1,156 @@
-# Multi Turn Company Search Benchmark
+# OpenBenchmarks Multi Turn Company Search Benchmark
 
-Open runner and offline judge for the [OpenBenchmarks Multi Turn Company Search
-Benchmark](https://openbenchmarks.com/multi-turn-company-search), maintained by
-**[OpenBenchmarks Labs](https://openbenchmarks.com)**.
+Open head-to-head benchmark runner for search APIs used by company-research agents.
 
-The benchmark asks one fixed research agent to find the complete set of
-companies matching three- or four-part constraints. The question, model,
-prompt, budgets, output schema, and three independent trials remain fixed while
-the search provider changes.
+Published and maintained by **[OpenBenchmarks Labs](https://openbenchmarks.com)**.
 
-There are two separate boards:
+**Live benchmark:** https://openbenchmarks.com/multi-turn-company-search
 
-- **Search only** — the agent can search and read normalized titles, URLs, and
-  snippets, but cannot fetch page text.
-- **Search + fetch** — the same agent can fetch exact URLs returned by search,
-  using provider-native extraction when available and a bounded local fetcher
-  otherwise.
+This repo is the open runner + judge behind that page. It contains the fixed agent,
+all measured vendor adapters, the local run-artifact contract, and the deterministic
+offline scorer. It does not require a hosted database: the runner reads one frozen
+dataset JSON file and writes one immutable JSON artifact per trial under `runs/`.
 
-No hosted service is needed. The runner reads a frozen dataset JSON file and
-writes immutable trial JSON files locally; the judge reads those files and
-writes a leaderboard JSON file locally.
+For every question, the agent must find the complete set of companies satisfying
+three or four constraints at once—for example geography, founding period, investor,
+accelerator, or funding history. The model, prompt, budgets, questions, output
+schema, and three independent trials stay fixed while only the search configuration
+changes.
+
+Two boards are reported separately:
+
+- **Search only.** The agent can issue focused searches and read normalized titles,
+  URLs, and snippets, but cannot fetch page text.
+- **Search + fetch.** The same agent can fetch an exact URL returned by search,
+  using the provider's native extraction endpoint where available and a bounded
+  local HTTP/Playwright fetcher otherwise.
+
+The boards remain separate because search-result quality and page-retrieval quality
+are different products.
+
+## What counts as a correct company set
+
+One rule, applied identically to every provider:
+
+1. **Every constraint must hold.** A company is correct only when it satisfies all
+   parts of the question. Partial matches are false positives.
+2. **The set must be complete.** A correct company omitted by the agent is a false
+   negative. Returning no unsupported companies is not enough if valid companies
+   were missed.
+3. **Identity is canonical.** Predictions are matched to the frozen answer set by
+   canonical domain, canonical name, or an explicitly declared alias.
+
+That produces four headline metrics: **precision**, **recall**, **F1**, and
+**exact-set accuracy**. Exact-set accuracy is the strictest measure: the returned
+set must contain every gold company and no extras.
 
 ## Endpoints
 
-- **Live benchmark** — https://openbenchmarks.com/multi-turn-company-search
-- **GitHub** — https://github.com/openbenchmarks-labs/multi-turn-company-search
+- **Live benchmark UI** — https://openbenchmarks.com/multi-turn-company-search
+- **GitHub repository** — https://github.com/openbenchmarks-labs/multi-turn-company-search
 - **Markdown agent docs** — https://openbenchmarks.com/llms.txt
 - **OpenAPI 3.1 spec** — https://openbenchmarks.com/openapi.json
+- **MCP server discovery** — https://openbenchmarks.com/.well-known/mcp.json
 
-## What is measured
+## Configurations measured
 
-Every returned company is matched to the frozen canonical answer set by domain,
-canonical name, or a declared alias.
+The benchmark compares the following concrete endpoints and configurations. A row
+is a configuration—not merely a vendor name—because two modes from the same vendor
+can behave like different products.
 
-- **Precision** — true positives divided by all returned companies.
-- **Recall** — true positives divided by all gold companies.
-- **F1** — harmonic mean of precision and recall for one agent run.
-- **Exact-set accuracy** — whether a run has no false positives or negatives.
-- **Operational metrics** — end-to-end time, model turns, cited-return rate, and
-  estimated provider/model cost.
+Each provider receives three independent trials per question. For every quality
+metric, the judge first averages each trial over the complete question set, then
+reports the **mean ± sample standard deviation** of those three trial-level values.
+Standard deviation is expressed in percentage points and is descriptive, not a
+confidence interval.
 
-For each quality metric, the judge first averages each trial over the complete
-question set. It then reports the mean and sample standard deviation of the
-three trial-level values. Standard deviation is expressed in percentage points;
-it describes run-to-run variation and is not a confidence interval.
-
-## Repository map
-
-| Path | Purpose |
+| Provider | Configuration |
 |---|---|
-| `scripts/run_company_research_benchmark.py` | Offline planner and explicitly paid runner. |
-| `scripts/judge_company_research.py` | Deterministic offline scorer and leaderboard builder. |
-| `scripts/company_research/agent.py` | Fixed model/tool loop and complete search/fetch traces. |
-| `scripts/company_research/vendors.py` | Measured search and native-fetch adapters. |
-| `scripts/company_research/custom_fetch.py` | Bounded HTTP fetch with a Playwright fallback. |
-| `scripts/company_research/dataset.py` | Frozen input artifact validation and hashing. |
-| `scripts/company_research/parser.py` | Structured company-set parser and normalization. |
-| `scripts/company_research/runner.py` | Concurrent execution, resume rules, and local artifact writer. |
-| `scripts/company_research/judge.py` | Exact matching, completeness checks, and mean ± SD aggregation. |
+| Brave Search | Brave web search |
+| Exa | Deep, Instant |
+| Firecrawl | Search |
+| Linkup | Fast, Standard |
+| Parallel | Basic, Advanced |
+| Seltz | Companies |
+| Google SERP | RapidAPI |
+| Tavily | Advanced |
 
-## Install
+The live page publishes the current search-only and search + fetch rankings, ordered
+by mean F1 and then mean precision. This repository contains the runner rather than
+a database export; locally generated rankings are written by the offline judge.
 
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-python3 -m pip install -r requirements.txt
-python3 -m playwright install chromium
-cp .env.example .env.local
+## What's in this repo
+
+| path | purpose |
+|---|---|
+| `scripts/run_company_research_benchmark.py` | Offline planner and explicitly paid multi-provider orchestrator. |
+| `scripts/judge_company_research.py` | Builds leaderboard JSON from saved trial artifacts without network calls. |
+| `scripts/company_research/agent.py` | Fixed OpenAI Responses API tool loop, prompt, budgets, and full search/fetch transcript. |
+| `scripts/company_research/vendors.py` | Search and native-fetch adapters for every measured configuration. |
+| `scripts/company_research/custom_fetch.py` | SSRF-hardened bounded HTTP fetch with a concurrency-limited Playwright fallback. |
+| `scripts/company_research/dataset.py` | Frozen dataset schema validation and SHA-256 content receipts. |
+| `scripts/company_research/parser.py` | Strict structured company-set parser and normalization. |
+| `scripts/company_research/runner.py` | Concurrent execution, resume rules, and atomic local artifact writes. |
+| `scripts/company_research/judge.py` | Canonical matching, completeness gates, metric calculation, and mean ± SD aggregation. |
+| `scripts/company_research/test_*.py` | Offline runner, model-client, and judge contract tests. |
+| `.env.example` | OpenAI and provider credential names; no secrets or database configuration. |
+
+## Reproducing a run
+
+Pick any `(mode, provider, question, trial)` tuple. Its artifact lives at:
+
+```text
+runs/<dataset>/<mode>/<provider>/<case>/trial-<n>.json
 ```
 
-Fill only the credentials for the providers you plan to run. Never commit
-`.env` or `.env.local`.
+The file contains:
 
-## Dataset input
+- **`case`** — the exact question and frozen canonical answer set used by the
+  offline judge. Gold answers are never included in the model prompt.
+- **`result.searches[]`** — each literal provider request, redacted response
+  envelope, normalized hits, latency, attempts, and cost receipt.
+- **`result.fetches[]`** — each requested URL plus the native or bounded-local
+  fetch response when fetch is enabled.
+- **`result.raw_model_response`** — every model turn and token-usage receipt.
+- **`parsed_companies`** — the strict structured set extracted from the final
+  response.
+- **`dataset.content_sha256`** — the frozen input receipt that prevents results
+  from different datasets being mixed silently.
 
-Supply a frozen `company-research-dataset-v1` JSON artifact with `--dataset`.
-The validator checks the schema and SHA-256 content receipt before any run is
-planned or executed. Each case contains a question, stable case key, constraint
-metadata, and canonical gold companies. Gold answers are used only by the
-offline judge and are never included in the model prompt.
+Existing successful trials are skipped on rerun. Failed trials remain available for
+inspection and are retried only with `--retry-errors`.
 
-The dataset is intentionally an explicit input rather than hidden runner state:
+## Running the benchmark yourself
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+python3 -m pip install -r requirements.txt
+python3 -m playwright install chromium
+cp .env.example .env && $EDITOR .env
+
+# Offline plan: validates the dataset and prints calls, budgets, and required keys.
+PYTHONPATH=scripts python scripts/run_company_research_benchmark.py \
+  --dataset /absolute/path/to/dataset.json \
+  --research-mode search_only
+
+# Paid execution requires both explicit confirmation flags.
+PYTHONPATH=scripts python scripts/run_company_research_benchmark.py \
+  --dataset /absolute/path/to/dataset.json \
+  --research-mode search_only \
+  --execute --confirm-paid
+
+PYTHONPATH=scripts python scripts/run_company_research_benchmark.py \
+  --dataset /absolute/path/to/dataset.json \
+  --research-mode search_and_fetch \
+  --execute --confirm-paid
+```
+
+The runner uses the standard OpenAI API through `OPENAI_API_KEY`. Fill only the
+provider keys selected with `--vendors`. Useful controls include `--trials`,
+`--query-offset`, `--query-limit`, `--vendor-concurrency`, `--trial-concurrency`,
+`--max-turns`, `--max-searches`, and `--max-fetches`.
+
+A valid input uses the `company-research-dataset-v1` contract:
 
 ```text
 dataset.json
@@ -92,113 +162,85 @@ dataset.json
 └── content_sha256
 ```
 
-## Verify without network calls
+Run the offline contract suite:
 
 ```bash
-PYTHONPATH=scripts .venv/bin/python -m unittest discover \
+PYTHONPATH=scripts python -m unittest discover \
   -s scripts/company_research -p 'test_*.py'
 ```
 
-The benchmark command is also offline by default. It validates the dataset and
-prints its execution plan without model, vendor, or file writes:
+## Judging saved runs
+
+Judging is deterministic and makes no provider or model calls:
 
 ```bash
-PYTHONPATH=scripts .venv/bin/python scripts/run_company_research_benchmark.py \
-  --dataset /absolute/path/to/dataset.json \
-  --research-mode search_only
-```
-
-## Run the benchmark
-
-Paid execution has a double guard; both flags are required:
-
-```bash
-PYTHONPATH=scripts .venv/bin/python scripts/run_company_research_benchmark.py \
-  --dataset /absolute/path/to/dataset.json \
-  --research-mode search_only \
-  --execute --confirm-paid
-```
-
-Run search + fetch separately:
-
-```bash
-PYTHONPATH=scripts .venv/bin/python scripts/run_company_research_benchmark.py \
-  --dataset /absolute/path/to/dataset.json \
-  --research-mode search_and_fetch \
-  --execute --confirm-paid
-```
-
-Useful controls include `--vendors`, `--trials`, `--query-offset`,
-`--query-limit`, `--vendor-concurrency`, `--trial-concurrency`, `--max-turns`,
-`--max-searches`, and `--max-fetches`.
-
-Artifacts are written to:
-
-```text
-runs/<dataset>/<mode>/<vendor>/<case>/trial-<n>.json
-```
-
-Existing successful trials are skipped. Existing errors are preserved unless
-`--retry-errors` is supplied. Each artifact retains the literal model response,
-normalized provider results, redacted request/response envelopes, timings,
-usage, cost receipts, parsed company set, question, and dataset content hash.
-
-## Judge saved runs
-
-Judging is deterministic and makes no network calls:
-
-```bash
-PYTHONPATH=scripts .venv/bin/python scripts/judge_company_research.py \
+PYTHONPATH=scripts python scripts/judge_company_research.py \
   --runs runs/multi-constraint-company-research-v1 \
   --output leaderboard.json \
   --trials 3
 ```
 
-The judge rejects incomplete comparisons: every vendor in a mode must have the
-same cases and all expected trial indexes. Failed or unparseable completed
-trials score as empty predictions rather than disappearing from the average.
-Rows are ranked by mean F1, then mean precision.
+The judge rejects incomplete comparisons: every provider in a mode must contain the
+same questions and every expected trial index. Failed or unparseable completed runs
+score as empty predictions rather than disappearing from the denominator.
 
-## Providers
+## Contributing a new provider
 
-- Brave Search
-- Exa Deep and Exa Instant
-- Firecrawl Search
-- Linkup Fast and Linkup Standard
-- Parallel Basic and Parallel Advanced
-- Seltz Companies
-- Google SERP through RapidAPI
-- Tavily Advanced
+1. Add a `VendorSpec` entry to `scripts/company_research/vendors.py` with the
+   endpoint, credential environment variable, public request configuration, fetch
+   capability, and dated unit-cost assumption.
+2. Add the provider's request branch and normalize its response to the shared
+   `{url, title, snippet, metadata}` hit shape.
+3. If the provider exposes native page extraction, add its fetch request and page
+   parser. Otherwise opt into the bounded custom fetcher explicitly.
+4. Add offline adapter fixtures/tests, run the contract suite, then run one isolated
+   question with `--vendors <your-provider> --trials 1 --query-limit 1` before a full
+   benchmark.
 
-A configuration is a row because endpoints or modes from the same vendor can
-behave like different products.
+Do not add OpenAI-native web tools or provider-specific prompting. The provider
+adapter is the comparison variable; the research agent must remain fixed.
 
-## Methodology and safety
+## Methodology
 
-- The model receives only the selected vendor-backed `web_search` and optional
-  `web_fetch` tools; OpenAI-native web tools are not enabled.
-- The default agent is GPT-5.6 Sol at medium reasoning effort, with a maximum of
-  eight turns, fourteen searches, and—only in search + fetch—fourteen fetches.
-- The research model is called through the standard OpenAI API using
-  `OPENAI_API_KEY`.
-- Questions run sequentially per provider, providers run concurrently, and the
-  three trials for a question run concurrently.
-- If every trial for one question fails, that provider stops to avoid spending
-  through the remaining question set.
-- Search + fetch validates Chromium before paid calls when a selected provider
-  uses the local fallback. The fetcher rejects private/local targets and bounds
-  redirects, response sizes, navigation time, and browser concurrency.
-- Authorization headers are redacted before artifacts are written.
-
-## Known limitations
-
-- The benchmark targets multi-constraint company discovery, not general web
-  search, news, coding, academic research, or consumer navigation.
-- Three trials reveal obvious instability but are too few for a strong
-  inferential uncertainty claim.
-- Search + fetch evaluates the combined search and retrieval stack; use the
-  search-only board to isolate search-result quality.
-- Costs use a dated list-price snapshot and exclude local browser compute.
+- **Frozen questions and gold sets.** Each dataset artifact is schema-validated and
+  content-addressed before execution. Every case contains one multi-constraint
+  question and a canonical company set. Gold data is available only to the offline
+  judge, never to the agent.
+- **Fixed agent.** The default agent is `gpt-5.6-sol` at medium reasoning effort,
+  with a maximum of eight model turns, fourteen searches, two searches per turn,
+  and ten results per search. Search + fetch additionally permits fourteen fetches,
+  at most two per turn.
+- **Provider swap.** The question, system prompt, model, reasoning effort, budgets,
+  output schema, and trial count are identical across rows. Only the provider-backed
+  search and fetch implementations change.
+- **No native model search.** The model receives only the selected provider's
+  `web_search` tool and, in search + fetch, `web_fetch`. OpenAI-native web search and
+  fetch are not enabled.
+- **Set scoring.** True positives are canonical identities present in both predicted
+  and gold sets. Extra predictions are false positives; missed gold identities are
+  false negatives. Precision, recall, F1, and exact-set accuracy are calculated per
+  agent run.
+- **Three-trial aggregation.** Each metric is first averaged across all questions
+  within trial 1, trial 2, and trial 3. The leaderboard reports the mean and sample
+  standard deviation of those three values rather than selecting the best attempt.
+- **Operational metrics.** Trial artifacts retain end-to-end latency, provider
+  latency, model turns, token usage, cited-return rate, and estimated vendor/model
+  cost. Costs use dated list-price assumptions rather than invoice reconciliation.
+- **Concurrency.** Questions run sequentially within one provider so a systematic
+  failure can stop further spend. Providers run concurrently, as do the three trials
+  for a question.
+- **Fetch safety.** Custom fetch rejects local/private network targets and bounds
+  redirects, response size, navigation time, and browser concurrency. Search + fetch
+  validates Chromium before paid calls begin.
+- **Credential safety.** Authorization headers are redacted before artifacts are
+  written. `.env`, `.env.local`, `runs/`, and local virtual environments are ignored
+  by Git.
+- **Known limitations.** This benchmark measures multi-constraint company discovery,
+  not general web search, news, coding, academic research, or consumer navigation.
+  Three trials expose obvious stochastic instability but are too few for a strong
+  inferential uncertainty claim. Search + fetch measures the combined search and
+  retrieval stack; use search only to isolate result quality. Local browser compute
+  is excluded from reported cost.
 
 No vendor sponsors or controls this benchmark.
 
