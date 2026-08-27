@@ -101,6 +101,16 @@ VENDORS: dict[str, VendorSpec] = {
         "POST /v1/search mode=basic", ("PARALLEL_API_KEY",), 0.005, True,
         "POST /v1/extract", "parallel_extract", {"mode": "basic"}, fetch_unit_cost_usd=0.001,
     ),
+    "parallel_fast": VendorSpec(
+        "parallel_fast", "parallel-fast", "Parallel fast", "parallel-fast",
+        "POST /v1/search mode=fast", ("PARALLEL_API_KEY",), 0.001, True,
+        "POST /v1/extract", "parallel_extract", {"mode": "fast"}, fetch_unit_cost_usd=0.001,
+    ),
+    "parallel_turbo": VendorSpec(
+        "parallel_turbo", "parallel-turbo", "Parallel turbo", "parallel-turbo",
+        "POST /v1/search mode=turbo", ("PARALLEL_API_KEY",), 0.001, True,
+        "POST /v1/extract", "parallel_extract", {"mode": "turbo"}, fetch_unit_cost_usd=0.001,
+    ),
     "seltz_companies": VendorSpec(
         "seltz_companies", "seltz-companies", "Seltz companies", "seltz-companies",
         "POST /v1/search scope=companies", ("SELTZ_API_KEY",), 0.005, False, None, None,

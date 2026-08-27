@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,6 +10,7 @@ from unittest.mock import patch
 from company_research.agent import AgentConfig, AgentResult
 from company_research.dataset import build_artifact
 from company_research.runner import RunnerConfig, execute, runner_plan
+from company_research.vendors import VENDORS, VendorCall, _parse_hits, search
 
 
 def _dataset(path: Path) -> dict:
@@ -35,6 +37,26 @@ def _dataset(path: Path) -> dict:
 
 
 class RunnerTest(unittest.TestCase):
+    def test_parallel_fast_and_turbo_contracts(self) -> None:
+        fixture = {"results": [{"url": "https://example.test", "title": "Example", "excerpts": ["Evidence"]}]}
+        empty_call = VendorCall(
+            status="ok", latency_ms=1, raw_request={}, raw_response=fixture,
+            error=None, attempts=[], cost_usd=None,
+        )
+        for key, mode in (("parallel_fast", "fast"), ("parallel_turbo", "turbo")):
+            with self.subTest(key=key):
+                spec = VENDORS[key]
+                self.assertEqual(spec.request_config, {"mode": mode})
+                self.assertEqual(spec.search_unit_cost_usd, 0.001)
+                self.assertTrue(spec.native_fetch)
+                self.assertEqual(_parse_hits(key, fixture, 10)[0]["url"], "https://example.test")
+                with (
+                    patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}),
+                    patch("company_research.vendors._request", return_value=empty_call) as request,
+                ):
+                    search(key, "company query")
+                    self.assertEqual(request.call_args.kwargs["body"]["mode"], mode)
+
     def test_plan_is_local_and_counts_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

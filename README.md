@@ -70,7 +70,7 @@ confidence interval.
 | Exa | Deep, Instant |
 | Firecrawl | Search |
 | Linkup | Fast, Standard |
-| Parallel | Basic, Advanced |
+| Parallel | Turbo, Fast, Basic, Advanced |
 | Seltz | Companies |
 | Google SERP | RapidAPI |
 | Tavily | Advanced |
