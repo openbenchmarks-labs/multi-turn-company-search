@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import re
 import socket
 import time
 from dataclasses import asdict, dataclass
@@ -94,22 +95,26 @@ VENDORS: dict[str, VendorSpec] = {
     "parallel_advanced": VendorSpec(
         "parallel_advanced", "parallel-advanced", "Parallel advanced", "parallel-advanced",
         "POST /v1/search mode=advanced", ("PARALLEL_API_KEY",), 0.005, True,
-        "POST /v1/extract", "parallel_extract", {"mode": "advanced"}, fetch_unit_cost_usd=0.001,
+        "POST /v1/extract", "parallel_extract",
+        {"mode": "advanced", "site_operator_policy": "source_policy"}, fetch_unit_cost_usd=0.001,
     ),
     "parallel_basic": VendorSpec(
         "parallel_basic", "parallel-basic", "Parallel basic", "parallel-basic",
         "POST /v1/search mode=basic", ("PARALLEL_API_KEY",), 0.005, True,
-        "POST /v1/extract", "parallel_extract", {"mode": "basic"}, fetch_unit_cost_usd=0.001,
+        "POST /v1/extract", "parallel_extract",
+        {"mode": "basic", "site_operator_policy": "source_policy"}, fetch_unit_cost_usd=0.001,
     ),
     "parallel_fast": VendorSpec(
         "parallel_fast", "parallel-fast", "Parallel fast", "parallel-fast",
         "POST /v1/search mode=fast", ("PARALLEL_API_KEY",), 0.001, True,
-        "POST /v1/extract", "parallel_extract", {"mode": "fast"}, fetch_unit_cost_usd=0.001,
+        "POST /v1/extract", "parallel_extract",
+        {"mode": "fast", "site_operator_policy": "source_policy"}, fetch_unit_cost_usd=0.001,
     ),
     "parallel_turbo": VendorSpec(
         "parallel_turbo", "parallel-turbo", "Parallel turbo", "parallel-turbo",
         "POST /v1/search mode=turbo", ("PARALLEL_API_KEY",), 0.001, True,
-        "POST /v1/extract", "parallel_extract", {"mode": "turbo"}, fetch_unit_cost_usd=0.001,
+        "POST /v1/extract", "parallel_extract",
+        {"mode": "turbo", "site_operator_policy": "source_policy"}, fetch_unit_cost_usd=0.001,
     ),
     "seltz_companies": VendorSpec(
         "seltz_companies", "seltz-companies", "Seltz companies", "seltz-companies",
@@ -267,6 +272,27 @@ def _reported_dollar_cost(payload: Any) -> float | None:
     return total if total >= 0 else None
 
 
+_SITE_INCLUDE_RE = re.compile(r"(?<![-])site:([^\s]+)", re.I)
+
+
+def parallel_site_policy(query: str) -> tuple[str, list[str]]:
+    """Move positive site: filters to Parallel's include_domains policy."""
+    domains: list[str] = []
+    seen: set[str] = set()
+
+    def take(match: re.Match[str]) -> str:
+        raw = match.group(1).strip("\"'").rstrip("/")
+        raw = re.sub(r"^https?://", "", raw, flags=re.I).removeprefix("www.")
+        host = raw.split("/", 1)[0].strip(".").lower()
+        if host and host not in seen:
+            seen.add(host)
+            domains.append(host)
+        return " "
+
+    cleaned = re.sub(r"\s+", " ", _SITE_INCLUDE_RE.sub(take, query)).strip()
+    return cleaned, domains
+
+
 def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[str, Any]]:
     payload = payload if isinstance(payload, dict) else {}
     hits: list[dict[str, Any]] = []
@@ -306,11 +332,24 @@ def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[st
 def search(vendor_key: str, query: str, *, max_results: int = 10) -> VendorCall:
     spec = VENDORS[vendor_key]
     if vendor_key.startswith("parallel_"):
-        mode = vendor_key.removeprefix("parallel_")
+        mode = str(spec.request_config["mode"])
+        sent_query = query
+        advanced_settings: dict[str, Any] = {"max_results": max_results}
+        if spec.request_config.get("site_operator_policy") == "source_policy":
+            sent_query, include_domains = parallel_site_policy(query)
+            if not sent_query:
+                sent_query = " ".join(include_domains) or query
+            if include_domains:
+                advanced_settings["source_policy"] = {"include_domains": include_domains}
         call = _request(
             method="POST", url="https://api.parallel.ai/v1/search",
             headers={"x-api-key": os.environ["PARALLEL_API_KEY"], "Content-Type": "application/json"},
-            body={"objective": query, "search_queries": [query], "mode": mode, "advanced_settings": {"max_results": max_results}},
+            body={
+                "objective": sent_query,
+                "search_queries": [sent_query],
+                "mode": mode,
+                "advanced_settings": advanced_settings,
+            },
             timeout=120 if mode == "advanced" else 60,
         )
     elif vendor_key.startswith("exa_"):

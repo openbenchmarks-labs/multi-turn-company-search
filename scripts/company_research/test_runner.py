@@ -10,7 +10,13 @@ from unittest.mock import patch
 from company_research.agent import AgentConfig, AgentResult
 from company_research.dataset import build_artifact
 from company_research.runner import RunnerConfig, execute, runner_plan
-from company_research.vendors import VENDORS, VendorCall, _parse_hits, search
+from company_research.vendors import (
+    VENDORS,
+    VendorCall,
+    _parse_hits,
+    parallel_site_policy,
+    search,
+)
 
 
 def _dataset(path: Path) -> dict:
@@ -37,25 +43,64 @@ def _dataset(path: Path) -> dict:
 
 
 class RunnerTest(unittest.TestCase):
-    def test_parallel_fast_and_turbo_contracts(self) -> None:
+    def test_parallel_modes_use_source_policy_for_site_queries(self) -> None:
         fixture = {"results": [{"url": "https://example.test", "title": "Example", "excerpts": ["Evidence"]}]}
         empty_call = VendorCall(
             status="ok", latency_ms=1, raw_request={}, raw_response=fixture,
             error=None, attempts=[], cost_usd=None,
         )
-        for key, mode in (("parallel_fast", "fast"), ("parallel_turbo", "turbo")):
+        query = "funding site:Crunchbase.com/org site:https://techcrunch.com/startups -site:reddit.com"
+        self.assertEqual(
+            parallel_site_policy(query),
+            ("funding -site:reddit.com", ["crunchbase.com", "techcrunch.com"]),
+        )
+        for key, mode in (
+            ("parallel_basic", "basic"),
+            ("parallel_advanced", "advanced"),
+            ("parallel_fast", "fast"),
+            ("parallel_turbo", "turbo"),
+        ):
             with self.subTest(key=key):
                 spec = VENDORS[key]
-                self.assertEqual(spec.request_config, {"mode": mode})
-                self.assertEqual(spec.search_unit_cost_usd, 0.001)
+                self.assertEqual(spec.request_config, {
+                    "mode": mode,
+                    "site_operator_policy": "source_policy",
+                })
+                self.assertEqual(
+                    spec.search_unit_cost_usd,
+                    0.001 if mode in {"fast", "turbo"} else 0.005,
+                )
                 self.assertTrue(spec.native_fetch)
                 self.assertEqual(_parse_hits(key, fixture, 10)[0]["url"], "https://example.test")
                 with (
                     patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}),
                     patch("company_research.vendors._request", return_value=empty_call) as request,
                 ):
-                    search(key, "company query")
-                    self.assertEqual(request.call_args.kwargs["body"]["mode"], mode)
+                    search(key, query, max_results=7)
+                    body = request.call_args.kwargs["body"]
+                    self.assertEqual(body["mode"], mode)
+                    self.assertEqual(body["objective"], "funding -site:reddit.com")
+                    self.assertEqual(body["search_queries"], ["funding -site:reddit.com"])
+                    self.assertEqual(body["advanced_settings"], {
+                        "max_results": 7,
+                        "source_policy": {
+                            "include_domains": ["crunchbase.com", "techcrunch.com"],
+                        },
+                    })
+
+    def test_parallel_query_without_site_filter_is_unchanged(self) -> None:
+        empty_call = VendorCall(
+            status="ok", latency_ms=1, raw_request={}, raw_response={"results": []},
+            error=None, attempts=[], cost_usd=None,
+        )
+        with (
+            patch.dict(os.environ, {"PARALLEL_API_KEY": "test-key"}),
+            patch("company_research.vendors._request", return_value=empty_call) as request,
+        ):
+            search("parallel_fast", "ordinary company query")
+        body = request.call_args.kwargs["body"]
+        self.assertEqual(body["objective"], "ordinary company query")
+        self.assertNotIn("source_policy", body["advanced_settings"])
 
     def test_plan_is_local_and_counts_runs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
