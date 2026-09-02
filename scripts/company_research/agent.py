@@ -377,7 +377,10 @@ def run_agent(
                         conversation.append(_tool_output(call, {"error": "per-turn search budget exhausted"}))
                         continue
                     searches_this_turn += 1
-                    vendor_call = search(vendor_key, query, max_results=config.max_results)
+                    search_kwargs: dict[str, Any] = {"max_results": config.max_results}
+                    if vendor_key == "perplexity":
+                        search_kwargs["search_context_size"] = "high" if allow_fetch else "low"
+                    vendor_call = search(vendor_key, query, **search_kwargs)
                     trace = SearchTrace(turn_index, len(result.searches) + 1, call_id, query, vendor_call)
                     result.searches.append(trace)
                     for hit in vendor_call.hits or []:
