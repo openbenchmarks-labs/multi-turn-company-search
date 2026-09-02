@@ -48,6 +48,7 @@ set must contain every gold company and no extras.
 
 - **Live benchmark UI** — https://openbenchmarks.com/multi-turn-company-search
 - **GitHub repository** — https://github.com/openbenchmarks-labs/multi-turn-company-search
+- **Public dataset** — 10 questions + frozen gold on Hugging Face as [`openbenchmarks/OB-Company-Websearch`](https://huggingface.co/datasets/openbenchmarks/OB-Company-Websearch)
 - **Markdown agent docs** — https://openbenchmarks.com/llms.txt
 - **OpenAPI 3.1 spec** — https://openbenchmarks.com/openapi.json
 - **MCP server discovery** — https://openbenchmarks.com/.well-known/mcp.json
@@ -80,6 +81,20 @@ confidence interval.
 
 Parallel maps `site:` hosts into `source_policy.include_domains` and strips those
 operators from the query; other vendors receive the agent query unchanged.
+
+## Datasets
+
+Board scores use a locked **45-question** private set: 24 questions have
+three constraints and 21 have four. The gold release contains **375**
+canonical question-company memberships (between two and thirty-seven
+valid companies per question). Every provider is run **three** independent
+trials per question on both modes.
+
+A separate **10-question** public search-only set, including frozen
+reference companies, is on Hugging Face as
+[`openbenchmarks/OB-Company-Websearch`](https://huggingface.co/datasets/openbenchmarks/OB-Company-Websearch).
+It can be used to inspect the schema and run this harness; scores on those
+rows are not comparable to the live boards.
 
 The live page publishes the current search-only and search + fetch rankings, ordered
 by mean F1 and then mean precision. This repository contains the runner rather than
@@ -211,7 +226,8 @@ adapter is the comparison variable; the research agent must remain fixed.
 - **Frozen questions and gold sets.** Each dataset artifact is schema-validated and
   content-addressed before execution. Every case contains one multi-constraint
   question and a canonical company set. Gold data is available only to the offline
-  judge, never to the agent.
+  judge, never to the agent. The published boards use the locked 45-question set;
+  the public Hugging Face dump is a 10-question schema sample.
 - **Fixed agent.** The default agent is `gpt-5.6-sol` at medium reasoning effort,
   with a maximum of eight model turns, fourteen searches, two searches per turn,
   and ten results per search. Search + fetch additionally permits fourteen fetches,
