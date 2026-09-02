@@ -131,6 +131,28 @@ VENDORS: dict[str, VendorSpec] = {
         "POST /extract", "tavily_extract",
         {"search_depth": "advanced", "chunks_per_source": 3}, fetch_unit_cost_usd=0.0032,
     ),
+    "you": VendorSpec(
+        "you", "you-search", "You.com", "you", "POST /v1/search",
+        ("YOU_API_KEY",), 0.005, True, "POST /v1/contents", "you_contents",
+        {"count": 10}, fetch_unit_cost_usd=0.001,
+    ),
+    "tinyfish": VendorSpec(
+        "tinyfish", "tinyfish-search", "TinyFish", "tinyfish",
+        "GET api.search.tinyfish.ai", ("TINYFISH_API_KEY",), 0.0, True,
+        "POST api.fetch.tinyfish.ai", "tinyfish_fetch", {}, fetch_unit_cost_usd=0.0,
+    ),
+    "perplexity": VendorSpec(
+        "perplexity", "perplexity-search", "Perplexity", "perplexity",
+        "POST /search", ("PERPLEXITY_API_KEY",), 0.005, False, None, None,
+        {
+            "max_results": 10,
+            "search_context_size_by_research_mode": {
+                "search_only": "low",
+                "search_and_fetch": "high",
+            },
+        },
+        custom_fetch=True,
+    ),
 }
 
 DEFAULT_VENDOR_KEYS = tuple(VENDORS)
@@ -263,10 +285,11 @@ def _reported_dollar_cost(payload: Any) -> float | None:
     if not isinstance(payload, dict):
         return None
     cost = payload.get("costDollars")
-    if not isinstance(cost, dict):
-        return None
+    candidate = cost.get("total") if isinstance(cost, dict) else None
+    if candidate is None and isinstance(payload.get("usage"), dict):
+        candidate = payload["usage"].get("total_cost_usd")
     try:
-        total = float(cost.get("total"))
+        total = float(candidate)
     except (TypeError, ValueError):
         return None
     return total if total >= 0 else None
@@ -326,10 +349,38 @@ def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[st
     elif vendor_key == "tavily":
         for item in payload.get("results") or []:
             hits.append(_hit(item.get("url"), item.get("title"), item.get("content"), {"score": item.get("score")}))
+    elif vendor_key == "you":
+        results = payload.get("results") or {}
+        for item in results.get("web") or []:
+            contents = item.get("contents") or {}
+            snippets = item.get("snippets") or contents.get("highlights") or []
+            snippet = "\n".join(value for value in snippets if isinstance(value, str))
+            hits.append(_hit(
+                item.get("url"), item.get("title"), snippet or item.get("description"),
+                {"page_age": item.get("page_age")},
+            ))
+    elif vendor_key == "tinyfish":
+        for item in payload.get("results") or []:
+            hits.append(_hit(
+                item.get("url"), item.get("title"), item.get("snippet"),
+                {"site_name": item.get("site_name"), "date": item.get("date")},
+            ))
+    elif vendor_key == "perplexity":
+        for item in payload.get("results") or []:
+            hits.append(_hit(
+                item.get("url"), item.get("title"), item.get("snippet"),
+                {"date": item.get("date"), "last_updated": item.get("last_updated")},
+            ))
     return _dedupe(hits, max_results)
 
 
-def search(vendor_key: str, query: str, *, max_results: int = 10) -> VendorCall:
+def search(
+    vendor_key: str,
+    query: str,
+    *,
+    max_results: int = 10,
+    search_context_size: str | None = None,
+) -> VendorCall:
     spec = VENDORS[vendor_key]
     if vendor_key.startswith("parallel_"):
         mode = str(spec.request_config["mode"])
@@ -399,6 +450,30 @@ def search(vendor_key: str, query: str, *, max_results: int = 10) -> VendorCall:
             headers={"Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}", "Content-Type": "application/json"},
             body={"query": query, "search_depth": "advanced", "max_results": max_results, "chunks_per_source": 3},
         )
+    elif vendor_key == "you":
+        call = _request(
+            method="POST", url="https://ydc-index.io/v1/search",
+            headers={"X-API-Key": os.environ["YOU_API_KEY"], "Content-Type": "application/json"},
+            body={"query": query, "count": min(max_results, 20)},
+        )
+    elif vendor_key == "tinyfish":
+        call = _request(
+            method="GET", url="https://api.search.tinyfish.ai",
+            headers={"X-API-Key": os.environ["TINYFISH_API_KEY"], "Accept": "application/json"},
+            params={"query": query}, timeout=45,
+        )
+    elif vendor_key == "perplexity":
+        if search_context_size not in {None, "low", "medium", "high"}:
+            raise ValueError("Perplexity search_context_size must be low, medium, or high")
+        call = _request(
+            method="POST", url="https://api.perplexity.ai/search",
+            headers={"Authorization": f"Bearer {os.environ['PERPLEXITY_API_KEY']}", "Content-Type": "application/json"},
+            body={
+                "query": query,
+                "max_results": min(max_results, 20),
+                "search_context_size": search_context_size or "high",
+            },
+        )
     else:  # pragma: no cover - registry and dispatcher change together
         raise KeyError(vendor_key)
     reported_cost = _reported_dollar_cost(call.raw_response)
@@ -421,6 +496,7 @@ def _assert_public_url(url: str) -> None:
 
 
 def _page(vendor_key: str, url: str, payload: Any, max_chars: int) -> dict[str, Any]:
+    raw_payload = payload
     payload = payload if isinstance(payload, dict) else {}
     if vendor_key.startswith("parallel_"):
         item = (payload.get("results") or [{}])[0]
@@ -438,6 +514,14 @@ def _page(vendor_key: str, url: str, payload: Any, max_chars: int) -> dict[str, 
         text, final_url, title = item.get("raw_content") or item.get("content") or "", item.get("url") or url, ""
     elif vendor_key.startswith("linkup_"):
         text, final_url, title = payload.get("markdown") or "", url, ""
+    elif vendor_key == "you":
+        item = (raw_payload if isinstance(raw_payload, list) else [{}])[0]
+        text = item.get("markdown") or item.get("html") or ""
+        final_url, title = item.get("url") or url, item.get("title") or ""
+    elif vendor_key == "tinyfish":
+        item = (payload.get("results") or [{}])[0]
+        text = item.get("text") or ""
+        final_url, title = item.get("final_url") or item.get("url") or url, item.get("title") or ""
     else:
         raise RuntimeError(f"{vendor_key} has no vendor-native fetch adapter")
     if not str(text).strip():
@@ -510,6 +594,19 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
             method="POST", url="https://api.linkup.so/v1/fetch",
             headers={"Authorization": f"Bearer {os.environ['LINKUP_API_KEY']}", "Content-Type": "application/json"},
             body={"url": url, "mode": "standard", "renderJs": False},
+        )
+    elif vendor_key == "you":
+        call = _request(
+            method="POST", url="https://ydc-index.io/v1/contents",
+            headers={"X-API-Key": os.environ["YOU_API_KEY"], "Content-Type": "application/json"},
+            body={"urls": [url], "formats": ["markdown", "metadata"]},
+        )
+    elif vendor_key == "tinyfish":
+        call = _request(
+            method="POST", url="https://api.fetch.tinyfish.ai",
+            headers={"X-API-Key": os.environ["TINYFISH_API_KEY"], "Content-Type": "application/json"},
+            body={"urls": [url], "purpose": objective, "format": "markdown"},
+            timeout=120,
         )
     else:  # pragma: no cover
         raise KeyError(vendor_key)

@@ -7,13 +7,16 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from company_research.agent import AgentConfig, AgentResult
+from company_research.agent import AgentConfig, AgentResult, run_agent
 from company_research.dataset import build_artifact
 from company_research.runner import RunnerConfig, execute, runner_plan
 from company_research.vendors import (
     VENDORS,
     VendorCall,
+    _page,
     _parse_hits,
+    capability_inventory,
+    fetch,
     parallel_site_policy,
     search,
 )
@@ -173,6 +176,204 @@ class RunnerTest(unittest.TestCase):
                         research_mode="search_only",
                     )
                 )
+
+    def test_vendor_roster_and_fetch_inventory(self) -> None:
+        self.assertEqual(
+            set(VENDORS),
+            {
+                "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
+                "linkup_standard", "parallel_advanced", "parallel_basic",
+                "parallel_fast", "parallel_turbo", "seltz_companies", "serp",
+                "tavily", "you", "tinyfish", "perplexity",
+            },
+        )
+        capabilities = {row["vendor"]: row for row in capability_inventory()}
+        for key in (
+            "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
+            "linkup_standard", "parallel_advanced", "parallel_basic",
+            "parallel_fast", "parallel_turbo", "tavily", "you", "tinyfish",
+        ):
+            self.assertTrue(capabilities[key]["native_fetch"])
+        for key in ("brave", "seltz_companies", "serp", "perplexity"):
+            self.assertFalse(capabilities[key]["native_fetch"])
+            self.assertTrue(capabilities[key]["custom_fetch"])
+        self.assertTrue(all(row["fetch_available"] for row in capabilities.values()))
+        self.assertEqual(
+            VENDORS["perplexity"].request_config["search_context_size_by_research_mode"],
+            {"search_only": "low", "search_and_fetch": "high"},
+        )
+
+    def test_every_vendor_response_shape_produces_ranked_hits(self) -> None:
+        fixtures = {
+            "brave": {"web": {"results": [{"url": "https://a.test", "title": "A", "description": "one"}]}},
+            "exa_deep": {"results": [{"url": "https://a.test", "title": "A", "highlights": ["one"]}]},
+            "exa_instant": {"results": [{"url": "https://a.test", "title": "A", "highlights": ["one"]}]},
+            "firecrawl": {"data": {"web": [{"url": "https://a.test", "title": "A", "description": "one"}]}},
+            "linkup_fast": {"results": [{"url": "https://a.test", "name": "A", "content": "one"}]},
+            "linkup_standard": {"results": [{"url": "https://a.test", "name": "A", "content": "one"}]},
+            "parallel_advanced": {"results": [{"url": "https://a.test", "title": "A", "excerpts": ["one"]}]},
+            "parallel_basic": {"results": [{"url": "https://a.test", "title": "A", "excerpts": ["one"]}]},
+            "parallel_fast": {"results": [{"url": "https://a.test", "title": "A", "excerpts": ["one"]}]},
+            "parallel_turbo": {"results": [{"url": "https://a.test", "title": "A", "excerpts": ["one"]}]},
+            "seltz_companies": {"documents": [{"url": "https://a.test", "title": "A", "content": "one"}]},
+            "serp": {"results": [{"url": "https://a.test", "title": "A", "description": "one"}]},
+            "tavily": {"results": [{"url": "https://a.test", "title": "A", "content": "one"}]},
+            "you": {"results": {"web": [{"url": "https://a.test", "title": "A", "snippets": ["one"]}]}},
+            "tinyfish": {"results": [{"url": "https://a.test", "title": "A", "snippet": "one"}]},
+            "perplexity": {"results": [{"url": "https://a.test", "title": "A", "snippet": "one"}]},
+        }
+        self.assertEqual(set(fixtures), set(VENDORS))
+        for vendor, payload in fixtures.items():
+            with self.subTest(vendor=vendor):
+                self.assertEqual(_parse_hits(vendor, payload, 10)[0]["url"], "https://a.test")
+
+    def test_public_board_search_request_contracts(self) -> None:
+        fixtures = {
+            "you": ("YOU_API_KEY", "https://ydc-index.io/v1/search", "POST"),
+            "tinyfish": ("TINYFISH_API_KEY", "https://api.search.tinyfish.ai", "GET"),
+            "perplexity": ("PERPLEXITY_API_KEY", "https://api.perplexity.ai/search", "POST"),
+        }
+        for vendor, (env_key, endpoint, method) in fixtures.items():
+            with self.subTest(vendor=vendor):
+                empty_call = VendorCall(
+                    status="ok", latency_ms=1, raw_request={}, raw_response={},
+                    error=None, attempts=[], cost_usd=None,
+                )
+                with (
+                    patch.dict(os.environ, {env_key: "test-key"}),
+                    patch("company_research.vendors._request", return_value=empty_call) as request,
+                ):
+                    search(vendor, "company query", max_results=7)
+                self.assertEqual(request.call_args.kwargs["url"], endpoint)
+                self.assertEqual(request.call_args.kwargs["method"], method)
+
+    def test_perplexity_search_context_size_contract(self) -> None:
+        for context_size in ("low", "high"):
+            with self.subTest(context_size=context_size):
+                empty_call = VendorCall("ok", 1, {}, {"results": []}, None, [], None)
+                with (
+                    patch.dict(os.environ, {"PERPLEXITY_API_KEY": "test-key"}),
+                    patch("company_research.vendors._request", return_value=empty_call) as request,
+                ):
+                    search(
+                        "perplexity",
+                        "company query",
+                        search_context_size=context_size,
+                    )
+                self.assertEqual(
+                    request.call_args.kwargs["body"]["search_context_size"],
+                    context_size,
+                )
+
+    def test_public_board_native_fetch_response_shapes(self) -> None:
+        fixtures = {
+            "you": [{"url": "https://a.test", "title": "A", "markdown": "one"}],
+            "tinyfish": {
+                "results": [{
+                    "url": "https://a.test",
+                    "final_url": "https://a.test/final",
+                    "title": "A",
+                    "text": "one",
+                }],
+            },
+        }
+        for vendor, payload in fixtures.items():
+            with self.subTest(vendor=vendor):
+                page = _page(vendor, "https://a.test", payload, 12_000)
+                self.assertEqual(page["text"], "one")
+                self.assertEqual(page["fetch_provider"], VENDORS[vendor].fetch_kind)
+
+    def test_public_board_native_fetch_request_contracts(self) -> None:
+        fixtures = {
+            "you": ("YOU_API_KEY", "https://ydc-index.io/v1/contents"),
+            "tinyfish": ("TINYFISH_API_KEY", "https://api.fetch.tinyfish.ai"),
+        }
+        responses = {
+            "you": [{"url": "https://a.test", "markdown": "one"}],
+            "tinyfish": {"results": [{"url": "https://a.test", "text": "one"}]},
+        }
+        for vendor, (env_key, endpoint) in fixtures.items():
+            with self.subTest(vendor=vendor):
+                vendor_call = VendorCall(
+                    status="ok", latency_ms=1, raw_request={}, raw_response=responses[vendor],
+                    error=None, attempts=[], cost_usd=None,
+                )
+                with (
+                    patch.dict(os.environ, {env_key: "test-key"}),
+                    patch("company_research.vendors._assert_public_url"),
+                    patch("company_research.vendors._request", return_value=vendor_call) as request,
+                ):
+                    result = fetch(vendor, "https://a.test", objective="Find evidence")
+                self.assertEqual(result.status, "ok")
+                self.assertEqual(request.call_args.kwargs["url"], endpoint)
+                self.assertEqual(request.call_args.kwargs["method"], "POST")
+
+        with patch("company_research.vendors.fetch_page", return_value={
+            "requested_url": "https://a.test", "final_url": "https://a.test",
+            "title": "A", "text": "one", "truncated": False,
+            "fetch_provider": "http",
+        }) as custom_fetch:
+            result = fetch("perplexity", "https://a.test", objective="Find evidence")
+        self.assertEqual(result.status, "ok")
+        custom_fetch.assert_called_once_with("https://a.test", max_chars=12_000)
+
+    def test_perplexity_context_size_follows_research_mode(self) -> None:
+        tool_call = [{
+            "type": "function_call", "name": "web_search", "call_id": "call-1",
+            "arguments": json.dumps({"query": "focused company query"}),
+        }]
+        vendor_call = VendorCall("ok", 5, {}, {}, None, [], 0.005, hits=[])
+        for config, expected in (
+            (AgentConfig(), "high"),
+            (AgentConfig(max_fetches=0, max_fetches_per_turn=None), "low"),
+        ):
+            with self.subTest(context_size=expected):
+                client = FakeClient([FakeResponse({}, tool_call), FakeResponse({"companies": []})])
+                with patch("company_research.agent.search", return_value=vendor_call) as search_mock:
+                    result = run_agent(
+                        "Find companies",
+                        vendor_key="perplexity",
+                        client=client,
+                        config=config,
+                    )
+                self.assertEqual(result.status, "ok")
+                search_mock.assert_called_once_with(
+                    "perplexity",
+                    "focused company query",
+                    max_results=10,
+                    search_context_size=expected,
+                )
+
+
+class FakeUsage:
+    input_tokens = 100
+    input_tokens_details = None
+    output_tokens = 20
+
+
+class FakeResponse:
+    def __init__(self, payload: dict, output: list[dict] | None = None) -> None:
+        self.output = output or []
+        self.output_text = json.dumps(payload) if not self.output else ""
+        self.usage = FakeUsage()
+
+    def model_dump(self, **_: object) -> dict:
+        return {"output": [], "output_text": self.output_text}
+
+
+class FakeResponses:
+    def __init__(self, responses: list[FakeResponse] | None = None) -> None:
+        self.requests: list[dict] = []
+        self.responses = list(responses or [])
+
+    def create(self, **request: object) -> FakeResponse:
+        self.requests.append(request)
+        return self.responses.pop(0) if self.responses else FakeResponse({"companies": []})
+
+
+class FakeClient:
+    def __init__(self, responses: list[FakeResponse] | None = None) -> None:
+        self.responses = FakeResponses(responses)
 
 
 if __name__ == "__main__":

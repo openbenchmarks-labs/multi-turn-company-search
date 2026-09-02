@@ -71,9 +71,15 @@ confidence interval.
 | Firecrawl | Search |
 | Linkup | Fast, Standard |
 | Parallel | Turbo, Fast, Basic, Advanced |
+| Perplexity | Search (`search_context_size` low on search-only, high on search + fetch) |
 | Seltz | Companies |
 | Google SERP | RapidAPI |
 | Tavily | Advanced |
+| TinyFish | Search |
+| You | Web search |
+
+Parallel maps `site:` hosts into `source_policy.include_domains` and strips those
+operators from the query; other vendors receive the agent query unchanged.
 
 The live page publishes the current search-only and search + fetch rankings, ordered
 by mean F1 and then mean precision. This repository contains the runner rather than
