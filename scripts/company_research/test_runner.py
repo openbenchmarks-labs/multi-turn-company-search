@@ -184,14 +184,14 @@ class RunnerTest(unittest.TestCase):
                 "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
                 "linkup_standard", "parallel_advanced", "parallel_basic",
                 "parallel_fast", "parallel_turbo", "seltz_companies", "serp",
-                "tavily", "you", "tinyfish", "perplexity",
+                "tavily_advanced", "tavily_basic", "you", "tinyfish", "perplexity",
             },
         )
         capabilities = {row["vendor"]: row for row in capability_inventory()}
         for key in (
             "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
             "linkup_standard", "parallel_advanced", "parallel_basic",
-            "parallel_fast", "parallel_turbo", "tavily", "you", "tinyfish",
+            "parallel_fast", "parallel_turbo", "tavily_advanced", "tavily_basic", "you", "tinyfish",
         ):
             self.assertTrue(capabilities[key]["native_fetch"])
         for key in ("brave", "seltz_companies", "serp", "perplexity"):
@@ -217,7 +217,8 @@ class RunnerTest(unittest.TestCase):
             "parallel_turbo": {"results": [{"url": "https://a.test", "title": "A", "excerpts": ["one"]}]},
             "seltz_companies": {"documents": [{"url": "https://a.test", "title": "A", "content": "one"}]},
             "serp": {"results": [{"url": "https://a.test", "title": "A", "description": "one"}]},
-            "tavily": {"results": [{"url": "https://a.test", "title": "A", "content": "one"}]},
+            "tavily_advanced": {"results": [{"url": "https://a.test", "title": "A", "content": "one"}]},
+            "tavily_basic": {"results": [{"url": "https://a.test", "title": "A", "content": "one"}]},
             "you": {"results": {"web": [{"url": "https://a.test", "title": "A", "snippets": ["one"]}]}},
             "tinyfish": {"results": [{"url": "https://a.test", "title": "A", "snippet": "one"}]},
             "perplexity": {"results": [{"url": "https://a.test", "title": "A", "snippet": "one"}]},
@@ -264,6 +265,27 @@ class RunnerTest(unittest.TestCase):
                     request.call_args.kwargs["body"]["search_context_size"],
                     context_size,
                 )
+
+    def test_tavily_search_depth_contracts(self) -> None:
+        empty_call = VendorCall("ok", 1, {}, {"results": []}, None, [], None)
+        for vendor, depth, expected_cost in (
+            ("tavily_basic", "basic", 0.008),
+            ("tavily_advanced", "advanced", 0.016),
+        ):
+            with self.subTest(vendor=vendor):
+                with (
+                    patch.dict(os.environ, {"TAVILY_API_KEY": "test-key"}),
+                    patch("company_research.vendors._request", return_value=empty_call) as request,
+                ):
+                    search(vendor, "company query", max_results=7)
+                body = request.call_args.kwargs["body"]
+                self.assertEqual(body["search_depth"], depth)
+                self.assertEqual(body["max_results"], 7)
+                self.assertEqual(VENDORS[vendor].search_unit_cost_usd, expected_cost)
+                if depth == "advanced":
+                    self.assertEqual(body["chunks_per_source"], 3)
+                else:
+                    self.assertNotIn("chunks_per_source", body)
 
     def test_public_board_native_fetch_response_shapes(self) -> None:
         fixtures = {
