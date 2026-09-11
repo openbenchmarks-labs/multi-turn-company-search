@@ -125,11 +125,17 @@ VENDORS: dict[str, VendorSpec] = {
         "serp", "serp-rapidapi", "SERP (RapidAPI)", "serp", "GET google-search74.p.rapidapi.com",
         ("RAPIDAPI_KEY",), 0.003, False, None, None, {"limit": 10}, custom_fetch=True,
     ),
-    "tavily": VendorSpec(
-        "tavily", "tavily-advanced", "Tavily advanced", "tavily-advanced",
+    "tavily_advanced": VendorSpec(
+        "tavily_advanced", "tavily-advanced", "Tavily advanced", "tavily-advanced",
         "POST /search search_depth=advanced", ("TAVILY_API_KEY",), 0.016, True,
         "POST /extract", "tavily_extract",
         {"search_depth": "advanced", "chunks_per_source": 3}, fetch_unit_cost_usd=0.0032,
+    ),
+    "tavily_basic": VendorSpec(
+        "tavily_basic", "tavily-basic", "Tavily basic", "tavily-basic",
+        "POST /search search_depth=basic", ("TAVILY_API_KEY",), 0.008, True,
+        "POST /extract", "tavily_extract",
+        {"search_depth": "basic"}, fetch_unit_cost_usd=0.0016,
     ),
     "you": VendorSpec(
         "you", "you-search", "You.com", "you", "POST /v1/search",
@@ -346,7 +352,7 @@ def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[st
     elif vendor_key == "serp":
         for item in payload.get("results") or []:
             hits.append(_hit(item.get("url") or item.get("link"), item.get("title"), item.get("description") or item.get("snippet")))
-    elif vendor_key == "tavily":
+    elif vendor_key.startswith("tavily_"):
         for item in payload.get("results") or []:
             hits.append(_hit(item.get("url"), item.get("title"), item.get("content"), {"score": item.get("score")}))
     elif vendor_key == "you":
@@ -444,11 +450,15 @@ def search(
             headers={"x-rapidapi-key": os.environ["RAPIDAPI_KEY"], "x-rapidapi-host": "google-search74.p.rapidapi.com"},
             params={"query": query, "limit": max_results}, timeout=45,
         )
-    elif vendor_key == "tavily":
+    elif vendor_key.startswith("tavily_"):
+        search_depth = str(spec.request_config["search_depth"])
+        body = {"query": query, "search_depth": search_depth, "max_results": max_results}
+        if search_depth == "advanced":
+            body["chunks_per_source"] = int(spec.request_config["chunks_per_source"])
         call = _request(
             method="POST", url="https://api.tavily.com/search",
             headers={"Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}", "Content-Type": "application/json"},
-            body={"query": query, "search_depth": "advanced", "max_results": max_results, "chunks_per_source": 3},
+            body=body,
         )
     elif vendor_key == "you":
         call = _request(
@@ -509,7 +519,7 @@ def _page(vendor_key: str, url: str, payload: Any, max_chars: int) -> dict[str, 
         item = payload.get("data") or {}
         metadata = item.get("metadata") or {}
         text, final_url, title = item.get("markdown") or "", metadata.get("sourceURL") or url, metadata.get("title") or ""
-    elif vendor_key == "tavily":
+    elif vendor_key.startswith("tavily_"):
         item = (payload.get("results") or [{}])[0]
         text, final_url, title = item.get("raw_content") or item.get("content") or "", item.get("url") or url, ""
     elif vendor_key.startswith("linkup_"):
@@ -583,11 +593,11 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
             headers={"Authorization": f"Bearer {os.environ['FIRECRAWL_API_KEY']}", "Content-Type": "application/json"},
             body={"url": url, "formats": ["markdown"], "onlyMainContent": True},
         )
-    elif vendor_key == "tavily":
+    elif vendor_key.startswith("tavily_"):
         call = _request(
             method="POST", url="https://api.tavily.com/extract",
             headers={"Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}", "Content-Type": "application/json"},
-            body={"urls": [url], "extract_depth": "advanced"},
+            body={"urls": [url], "extract_depth": spec.request_config["search_depth"]},
         )
     elif vendor_key.startswith("linkup_"):
         call = _request(
