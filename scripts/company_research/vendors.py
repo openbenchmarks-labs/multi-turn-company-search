@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ipaddress
 import os
+import nimble
 import re
 import socket
 import time
@@ -41,9 +42,14 @@ class VendorSpec:
     fetch_unit_cost_usd: float | None = None
     custom_fetch: bool = False
 
+    @property
+    def effective_fetch_unit_cost_usd(self) -> float | None:
+        return nimble.extract_price() if self.key.startswith("nimble_") else self.fetch_unit_cost_usd
+
     def public_dict(self) -> dict[str, Any]:
         value = asdict(self)
         value["env_keys"] = list(self.env_keys)
+        value["fetch_unit_cost_usd"] = self.effective_fetch_unit_cost_usd
         return value
 
 
@@ -137,11 +143,6 @@ VENDORS: dict[str, VendorSpec] = {
         "POST /extract", "tavily_extract",
         {"search_depth": "basic"}, fetch_unit_cost_usd=0.0016,
     ),
-    "you": VendorSpec(
-        "you", "you-search", "You.com", "you", "POST /v1/search",
-        ("YOU_API_KEY",), 0.005, True, "POST /v1/contents", "you_contents",
-        {"count": 10}, fetch_unit_cost_usd=0.001,
-    ),
     "tinyfish": VendorSpec(
         "tinyfish", "tinyfish-search", "TinyFish", "tinyfish",
         "GET api.search.tinyfish.ai", ("TINYFISH_API_KEY",), 0.0, True,
@@ -160,6 +161,26 @@ VENDORS: dict[str, VendorSpec] = {
         custom_fetch=True,
     ),
 }
+
+for _depth, _price in nimble.SEARCH_PRICES.items():
+    _key = f"nimble_{_depth}"
+    VENDORS[_key] = VendorSpec(
+        _key, f"nimble-{_depth}", f"Nimble {_depth}", f"nimble-{_depth}",
+        f"POST /v2/search search_depth={_depth} full_content=false",
+        ("NIMBLE_API_KEY",), _price, True, "POST /v2/extract", "nimble_extract",
+        {"search_depth": _depth, "full_content": False, "focus": "general"},
+    )
+
+for _core in (False, True):
+    _key = "you_highlights_core" if _core else "you_highlights"
+    _slug = _key.replace("_", "-")
+    VENDORS[_key] = VendorSpec(
+        _key, _slug, "You highlights core" if _core else "You highlights", _slug,
+        "POST /v1/search", ("YOU_API_KEY",), 0.005, True,
+        "POST /v1/contents", "you_contents",
+        {"count": 10, "extraction": {"extraction_mode": "highlights"},
+         **({"knowledge": "core"} if _core else {})}, fetch_unit_cost_usd=0.001,
+    )
 
 DEFAULT_VENDOR_KEYS = tuple(VENDORS)
 
@@ -325,6 +346,8 @@ def parallel_site_policy(query: str) -> tuple[str, list[str]]:
 def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[str, Any]]:
     payload = payload if isinstance(payload, dict) else {}
     hits: list[dict[str, Any]] = []
+    if vendor_key.startswith("nimble_"):
+        return _dedupe([_hit(h["url"], h["title"], h["snippet"]) for h in nimble.search_hits(payload, max_results)], max_results)
     if vendor_key.startswith("parallel_"):
         for item in payload.get("results") or []:
             excerpts = item.get("excerpts") or []
@@ -355,11 +378,11 @@ def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[st
     elif vendor_key.startswith("tavily_"):
         for item in payload.get("results") or []:
             hits.append(_hit(item.get("url"), item.get("title"), item.get("content"), {"score": item.get("score")}))
-    elif vendor_key == "you":
+    elif vendor_key in {"you_highlights", "you_highlights_core"}:
         results = payload.get("results") or {}
         for item in results.get("web") or []:
             contents = item.get("contents") or {}
-            snippets = item.get("snippets") or contents.get("highlights") or []
+            snippets = contents.get("highlights") or item.get("snippets") or []
             snippet = "\n".join(value for value in snippets if isinstance(value, str))
             hits.append(_hit(
                 item.get("url"), item.get("title"), snippet or item.get("description"),
@@ -388,7 +411,13 @@ def search(
     search_context_size: str | None = None,
 ) -> VendorCall:
     spec = VENDORS[vendor_key]
-    if vendor_key.startswith("parallel_"):
+    if vendor_key.startswith("nimble_"):
+        call = _request(
+            method="POST", url=nimble.SEARCH_URL,
+            headers={"Authorization": f"Bearer {os.environ['NIMBLE_API_KEY']}", "Content-Type": "application/json"},
+            body=nimble.search_body(query, spec.request_config["search_depth"], max_results),
+        )
+    elif vendor_key.startswith("parallel_"):
         mode = str(spec.request_config["mode"])
         sent_query = query
         advanced_settings: dict[str, Any] = {"max_results": max_results}
@@ -460,11 +489,11 @@ def search(
             headers={"Authorization": f"Bearer {os.environ['TAVILY_API_KEY']}", "Content-Type": "application/json"},
             body=body,
         )
-    elif vendor_key == "you":
+    elif vendor_key in {"you_highlights", "you_highlights_core"}:
         call = _request(
             method="POST", url="https://ydc-index.io/v1/search",
             headers={"X-API-Key": os.environ["YOU_API_KEY"], "Content-Type": "application/json"},
-            body={"query": query, "count": min(max_results, 20)},
+            body={**spec.request_config, "query": query, "count": min(max_results, 20)},
         )
     elif vendor_key == "tinyfish":
         call = _request(
@@ -508,6 +537,8 @@ def _assert_public_url(url: str) -> None:
 def _page(vendor_key: str, url: str, payload: Any, max_chars: int) -> dict[str, Any]:
     raw_payload = payload
     payload = payload if isinstance(payload, dict) else {}
+    if vendor_key.startswith("nimble_"):
+        return nimble.extract_page(payload, url, max_chars)
     if vendor_key.startswith("parallel_"):
         item = (payload.get("results") or [{}])[0]
         text = item.get("full_content") or "\n".join(item.get("excerpts") or [])
@@ -524,7 +555,7 @@ def _page(vendor_key: str, url: str, payload: Any, max_chars: int) -> dict[str, 
         text, final_url, title = item.get("raw_content") or item.get("content") or "", item.get("url") or url, ""
     elif vendor_key.startswith("linkup_"):
         text, final_url, title = payload.get("markdown") or "", url, ""
-    elif vendor_key == "you":
+    elif vendor_key in {"you_highlights", "you_highlights_core"}:
         item = (raw_payload if isinstance(raw_payload, list) else [{}])[0]
         text = item.get("markdown") or item.get("html") or ""
         final_url, title = item.get("url") or url, item.get("title") or ""
@@ -574,7 +605,14 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
             attempts=[], cost_usd=None,
         )
     _assert_public_url(url)
-    if vendor_key.startswith("parallel_"):
+    if vendor_key.startswith("nimble_"):
+        nimble.extract_price()  # Validate an optional rate before issuing the call.
+        call = _request(
+            method="POST", url=nimble.EXTRACT_URL,
+            headers={"Authorization": f"Bearer {os.environ['NIMBLE_API_KEY']}", "Content-Type": "application/json"},
+            body={"url": url, "formats": ["markdown"]}, timeout=90,
+        )
+    elif vendor_key.startswith("parallel_"):
         call = _request(
             method="POST", url="https://api.parallel.ai/v1/extract",
             headers={"x-api-key": os.environ["PARALLEL_API_KEY"], "Content-Type": "application/json"},
@@ -605,7 +643,7 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
             headers={"Authorization": f"Bearer {os.environ['LINKUP_API_KEY']}", "Content-Type": "application/json"},
             body={"url": url, "mode": "standard", "renderJs": False},
         )
-    elif vendor_key == "you":
+    elif vendor_key in {"you_highlights", "you_highlights_core"}:
         call = _request(
             method="POST", url="https://ydc-index.io/v1/contents",
             headers={"X-API-Key": os.environ["YOU_API_KEY"], "Content-Type": "application/json"},
@@ -628,6 +666,6 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
             call.error = f"{type(exc).__name__}: {exc}"
     reported_cost = _reported_dollar_cost(call.raw_response)
     call.cost_usd = (
-        reported_cost if reported_cost is not None else spec.fetch_unit_cost_usd
+        reported_cost if reported_cost is not None else spec.effective_fetch_unit_cost_usd
     ) if call.status == "ok" else 0.0
     return call
