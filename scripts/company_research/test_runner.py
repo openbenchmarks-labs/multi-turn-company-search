@@ -13,6 +13,7 @@ from company_research.runner import RunnerConfig, execute, runner_plan
 from company_research.vendors import (
     VENDORS,
     VendorCall,
+    _json_or_text,
     _page,
     _parse_hits,
     capability_inventory,
@@ -185,6 +186,7 @@ class RunnerTest(unittest.TestCase):
                 "linkup_standard", "parallel_advanced", "parallel_basic",
                 "parallel_fast", "parallel_turbo", "seltz_companies", "serp",
                 "tavily_advanced", "tavily_basic", "you", "tinyfish", "perplexity",
+                "string",
             },
         )
         capabilities = {row["vendor"]: row for row in capability_inventory()}
@@ -192,6 +194,7 @@ class RunnerTest(unittest.TestCase):
             "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
             "linkup_standard", "parallel_advanced", "parallel_basic",
             "parallel_fast", "parallel_turbo", "tavily_advanced", "tavily_basic", "you", "tinyfish",
+            "string",
         ):
             self.assertTrue(capabilities[key]["native_fetch"])
         for key in ("brave", "seltz_companies", "serp", "perplexity"):
@@ -222,6 +225,7 @@ class RunnerTest(unittest.TestCase):
             "you": {"results": {"web": [{"url": "https://a.test", "title": "A", "snippets": ["one"]}]}},
             "tinyfish": {"results": [{"url": "https://a.test", "title": "A", "snippet": "one"}]},
             "perplexity": {"results": [{"url": "https://a.test", "title": "A", "snippet": "one"}]},
+            "string": {"results": [{"position": 1, "url": "https://a.test", "title": "A", "snippet": "one"}]},
         }
         self.assertEqual(set(fixtures), set(VENDORS))
         for vendor, payload in fixtures.items():
@@ -286,6 +290,59 @@ class RunnerTest(unittest.TestCase):
                     self.assertEqual(body["chunks_per_source"], 3)
                 else:
                     self.assertNotIn("chunks_per_source", body)
+
+    def test_string_search_and_fetch_request_contracts(self) -> None:
+        empty_call = VendorCall("ok", 1, {}, {"results": []}, None, [], None)
+        with (
+            patch.dict(os.environ, {"STRING_API_KEY": "test-key"}),
+            patch("company_research.vendors._request", return_value=empty_call) as request,
+        ):
+            search("string", "company query", max_results=7)
+        self.assertEqual(request.call_args.kwargs["url"], "https://request.usestring.ai/v1/search")
+        self.assertEqual(request.call_args.kwargs["method"], "POST")
+        self.assertEqual(request.call_args.kwargs["body"], {"query": "company query", "engine": "google"})
+
+        payload = {
+            "results": [
+                {"position": index, "url": f"https://a{index}.test", "title": "A", "snippet": "one"}
+                for index in range(1, 6)
+            ]
+        }
+        self.assertEqual(len(_parse_hits("string", payload, 2)), 2)
+
+        fetch_call = VendorCall(
+            status="ok", latency_ms=1, raw_request={},
+            raw_response={"_markdown": "readable page", "_status_code": "200"},
+            error=None, attempts=[], cost_usd=None,
+        )
+        with (
+            patch.dict(os.environ, {"STRING_API_KEY": "test-key"}),
+            patch("company_research.vendors._assert_public_url"),
+            patch("company_research.vendors._request", return_value=fetch_call) as request,
+        ):
+            result = fetch("string", "https://a.test", objective="Find evidence")
+        self.assertEqual(result.status, "ok")
+        self.assertEqual(result.page["text"], "readable page")
+        self.assertEqual(result.page["fetch_provider"], "string_fetch")
+        self.assertEqual(request.call_args.kwargs["url"], "https://request.usestring.ai/v1/fetch")
+        self.assertEqual(request.call_args.kwargs["body"], {
+            "url": "https://a.test",
+            "format": "markdown",
+            "markdownMode": "readable",
+        })
+
+    def test_markdown_fetch_body_keeps_page_and_destination_status(self) -> None:
+        class MarkdownResponse:
+            headers = {"content-type": "text/markdown; charset=utf-8", "x-status-code": "404"}
+            text = "# Not found"
+
+            def json(self) -> dict:
+                raise ValueError("not json")
+
+        payload = _json_or_text(MarkdownResponse())
+        self.assertEqual(payload, {"_markdown": "# Not found", "_status_code": "404"})
+        with self.assertRaisesRegex(RuntimeError, "HTTP 404 at the destination"):
+            _page("string", "https://a.test", payload, 12_000)
 
     def test_public_board_native_fetch_response_shapes(self) -> None:
         fixtures = {

@@ -187,6 +187,7 @@ confidence interval.
 | Perplexity   | Search (`search_context_size` low on search-only, high on search + fetch) |
 | Seltz        | Companies                                                                 |
 | Google SERP  | RapidAPI                                                                  |
+| String       | Web Access search (Google engine) + readable-markdown fetch               |
 | Tavily       | Basic, Advanced                                                           |
 | TinyFish     | Search                                                                    |
 | You          | Web search                                                                |
