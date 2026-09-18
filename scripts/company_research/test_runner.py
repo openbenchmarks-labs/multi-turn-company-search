@@ -181,15 +181,15 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(
             set(VENDORS),
             {
-                "nimble_lite", "nimble_standard", "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
-                "linkup_standard", "parallel_advanced", "parallel_basic",
+                "nimble_lite", "nimble_standard", "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_deep",
+                "linkup_fast", "linkup_standard", "parallel_advanced", "parallel_basic",
                 "parallel_fast", "parallel_turbo", "seltz_companies", "serp",
                 "tavily_advanced", "tavily_basic", "you_highlights", "you_highlights_core", "tinyfish", "perplexity",
             },
         )
         capabilities = {row["vendor"]: row for row in capability_inventory()}
         for key in (
-            "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
+            "exa_deep", "exa_instant", "firecrawl", "linkup_deep", "linkup_fast",
             "linkup_standard", "parallel_advanced", "parallel_basic",
             "parallel_fast", "parallel_turbo", "tavily_advanced", "tavily_basic", "you_highlights", "you_highlights_core", "tinyfish",
         ):
@@ -209,6 +209,7 @@ class RunnerTest(unittest.TestCase):
             "exa_deep": {"results": [{"url": "https://a.test", "title": "A", "highlights": ["one"]}]},
             "exa_instant": {"results": [{"url": "https://a.test", "title": "A", "highlights": ["one"]}]},
             "firecrawl": {"data": {"web": [{"url": "https://a.test", "title": "A", "description": "one"}]}},
+            "linkup_deep": {"results": [{"url": "https://a.test", "name": "A", "content": "one"}]},
             "linkup_fast": {"results": [{"url": "https://a.test", "name": "A", "content": "one"}]},
             "linkup_standard": {"results": [{"url": "https://a.test", "name": "A", "content": "one"}]},
             "parallel_advanced": {"results": [{"url": "https://a.test", "title": "A", "excerpts": ["one"]}]},
