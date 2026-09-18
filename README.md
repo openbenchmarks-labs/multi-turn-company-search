@@ -188,7 +188,7 @@ confidence interval.
 | Brave Search | Brave web search                                                          |
 | Exa          | Deep, Instant                                                             |
 | Firecrawl    | Search                                                                    |
-| Linkup       | Fast, Standard                                                            |
+| Linkup       | Fast, Standard, Deep                                                      |
 | Nimble       | Lite, Standard                                                            |
 | Parallel     | Turbo, Fast, Basic, Advanced                                              |
 | Perplexity   | Search (`search_context_size` low on search-only, high on search + fetch) |

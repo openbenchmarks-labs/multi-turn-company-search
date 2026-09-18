@@ -87,6 +87,11 @@ VENDORS: dict[str, VendorSpec] = {
         ("FIRECRAWL_API_KEY",), 0.005, True, "POST /v2/scrape", "firecrawl_scrape",
         {}, fetch_unit_cost_usd=0.0025,
     ),
+    "linkup_deep": VendorSpec(
+        "linkup_deep", "linkup-deep", "Linkup deep", "linkup-deep", "POST /v1/search depth=deep",
+        ("LINKUP_API_KEY",), 0.05, True, "POST /v1/fetch", "linkup_fetch",
+        {"depth": "deep", "outputType": "searchResults"}, fetch_unit_cost_usd=0.001,
+    ),
     "linkup_fast": VendorSpec(
         "linkup_fast", "linkup-fast", "Linkup fast", "linkup-fast", "POST /v1/search depth=fast",
         ("LINKUP_API_KEY",), 0.005, True, "POST /v1/fetch", "linkup_fetch",
@@ -465,6 +470,7 @@ def search(
             method="POST", url="https://api.linkup.so/v1/search",
             headers={"Authorization": f"Bearer {os.environ['LINKUP_API_KEY']}", "Content-Type": "application/json"},
             body={"q": query, "depth": depth, "outputType": "searchResults", "maxResults": max_results},
+            timeout=180 if depth == "deep" else 90,
         )
     elif vendor_key == "seltz_companies":
         call = _request(
