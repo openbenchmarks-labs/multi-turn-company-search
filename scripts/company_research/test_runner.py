@@ -182,10 +182,10 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(
             set(VENDORS),
             {
-                "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
+                "nimble_lite", "nimble_standard", "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
                 "linkup_standard", "parallel_advanced", "parallel_basic",
                 "parallel_fast", "parallel_turbo", "seltz_companies", "serp",
-                "tavily_advanced", "tavily_basic", "you", "tinyfish", "perplexity",
+                "tavily_advanced", "tavily_basic", "you_highlights", "you_highlights_core", "tinyfish", "perplexity",
                 "string",
             },
         )
@@ -193,7 +193,7 @@ class RunnerTest(unittest.TestCase):
         for key in (
             "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
             "linkup_standard", "parallel_advanced", "parallel_basic",
-            "parallel_fast", "parallel_turbo", "tavily_advanced", "tavily_basic", "you", "tinyfish",
+            "parallel_fast", "parallel_turbo", "tavily_advanced", "tavily_basic", "you_highlights", "you_highlights_core", "tinyfish",
             "string",
         ):
             self.assertTrue(capabilities[key]["native_fetch"])
@@ -222,11 +222,14 @@ class RunnerTest(unittest.TestCase):
             "serp": {"results": [{"url": "https://a.test", "title": "A", "description": "one"}]},
             "tavily_advanced": {"results": [{"url": "https://a.test", "title": "A", "content": "one"}]},
             "tavily_basic": {"results": [{"url": "https://a.test", "title": "A", "content": "one"}]},
-            "you": {"results": {"web": [{"url": "https://a.test", "title": "A", "snippets": ["one"]}]}},
+            "you_highlights": {"results": {"web": [{"url": "https://a.test", "title": "A", "snippets": ["one"]}]}},
             "tinyfish": {"results": [{"url": "https://a.test", "title": "A", "snippet": "one"}]},
             "perplexity": {"results": [{"url": "https://a.test", "title": "A", "snippet": "one"}]},
             "string": {"results": [{"position": 1, "url": "https://a.test", "title": "A", "snippet": "one"}]},
         }
+        fixtures["you_highlights_core"] = fixtures["you_highlights"]
+        fixtures["nimble_lite"] = {"results": [{"url": "https://a.test", "title": "A", "description": "one"}]}
+        fixtures["nimble_standard"] = fixtures["nimble_lite"]
         self.assertEqual(set(fixtures), set(VENDORS))
         for vendor, payload in fixtures.items():
             with self.subTest(vendor=vendor):
@@ -234,7 +237,7 @@ class RunnerTest(unittest.TestCase):
 
     def test_public_board_search_request_contracts(self) -> None:
         fixtures = {
-            "you": ("YOU_API_KEY", "https://ydc-index.io/v1/search", "POST"),
+            "you_highlights": ("YOU_API_KEY", "https://ydc-index.io/v1/search", "POST"),
             "tinyfish": ("TINYFISH_API_KEY", "https://api.search.tinyfish.ai", "GET"),
             "perplexity": ("PERPLEXITY_API_KEY", "https://api.perplexity.ai/search", "POST"),
         }
@@ -346,7 +349,7 @@ class RunnerTest(unittest.TestCase):
 
     def test_public_board_native_fetch_response_shapes(self) -> None:
         fixtures = {
-            "you": [{"url": "https://a.test", "title": "A", "markdown": "one"}],
+            "you_highlights": [{"url": "https://a.test", "title": "A", "markdown": "one"}],
             "tinyfish": {
                 "results": [{
                     "url": "https://a.test",
@@ -364,11 +367,11 @@ class RunnerTest(unittest.TestCase):
 
     def test_public_board_native_fetch_request_contracts(self) -> None:
         fixtures = {
-            "you": ("YOU_API_KEY", "https://ydc-index.io/v1/contents"),
+            "you_highlights": ("YOU_API_KEY", "https://ydc-index.io/v1/contents"),
             "tinyfish": ("TINYFISH_API_KEY", "https://api.fetch.tinyfish.ai"),
         }
         responses = {
-            "you": [{"url": "https://a.test", "markdown": "one"}],
+            "you_highlights": [{"url": "https://a.test", "markdown": "one"}],
             "tinyfish": {"results": [{"url": "https://a.test", "text": "one"}]},
         }
         for vendor, (env_key, endpoint) in fixtures.items():
