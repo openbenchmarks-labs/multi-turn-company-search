@@ -160,6 +160,12 @@ VENDORS: dict[str, VendorSpec] = {
         },
         custom_fetch=True,
     ),
+    "string": VendorSpec(
+        "string", "string-search", "String", "string", "POST /v1/search engine=google",
+        ("STRING_API_KEY",), 0.0015, True, "POST /v1/fetch", "string_fetch",
+        {"engine": "google", "format": "markdown", "markdownMode": "readable"},
+        fetch_unit_cost_usd=0.0003,
+    ),
 }
 
 for _depth, _price in nimble.SEARCH_PRICES.items():
@@ -217,6 +223,13 @@ def _redact_headers(headers: dict[str, str]) -> dict[str, str]:
 
 
 def _json_or_text(response: Any) -> Any:
+    headers = getattr(response, "headers", None) or {}
+    if str(headers.get("content-type") or "").lower().startswith("text/markdown"):
+        # String answers a fetch with the page itself and the destination status header.
+        return {
+            "_markdown": str(getattr(response, "text", ""))[:100_000],
+            "_status_code": headers.get("x-status-code"),
+        }
     try:
         return response.json()
     except ValueError:
@@ -400,6 +413,12 @@ def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[st
                 item.get("url"), item.get("title"), item.get("snippet"),
                 {"date": item.get("date"), "last_updated": item.get("last_updated")},
             ))
+    elif vendor_key == "string":
+        for item in payload.get("results") or []:
+            hits.append(_hit(
+                item.get("url"), item.get("title"), item.get("snippet"),
+                {"position": item.get("position"), "display_url": item.get("displayUrl")},
+            ))
     return _dedupe(hits, max_results)
 
 
@@ -513,6 +532,14 @@ def search(
                 "search_context_size": search_context_size or "high",
             },
         )
+    elif vendor_key == "string":
+        # String returns one result page and takes no count parameter, so _dedupe trims it.
+        call = _request(
+            method="POST", url="https://request.usestring.ai/v1/search",
+            headers={"Authorization": f"Bearer {os.environ['STRING_API_KEY']}", "Content-Type": "application/json"},
+            body={"query": query, "engine": str(spec.request_config["engine"])},
+            timeout=60,
+        )
     else:  # pragma: no cover - registry and dispatcher change together
         raise KeyError(vendor_key)
     reported_cost = _reported_dollar_cost(call.raw_response)
@@ -563,6 +590,11 @@ def _page(vendor_key: str, url: str, payload: Any, max_chars: int) -> dict[str, 
         item = (payload.get("results") or [{}])[0]
         text = item.get("text") or ""
         final_url, title = item.get("final_url") or item.get("url") or url, item.get("title") or ""
+    elif vendor_key == "string":
+        destination_status = str(payload.get("_status_code") or "")
+        if destination_status and not destination_status.startswith("2"):
+            raise RuntimeError(f"string native fetch reached HTTP {destination_status} at the destination")
+        text, final_url, title = payload.get("_markdown") or "", url, ""
     else:
         raise RuntimeError(f"{vendor_key} has no vendor-native fetch adapter")
     if not str(text).strip():
@@ -655,6 +687,16 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
             headers={"X-API-Key": os.environ["TINYFISH_API_KEY"], "Content-Type": "application/json"},
             body={"urls": [url], "purpose": objective, "format": "markdown"},
             timeout=120,
+        )
+    elif vendor_key == "string":
+        call = _request(
+            method="POST", url="https://request.usestring.ai/v1/fetch",
+            headers={"Authorization": f"Bearer {os.environ['STRING_API_KEY']}", "Content-Type": "application/json"},
+            body={
+                "url": url,
+                "format": str(spec.request_config["format"]),
+                "markdownMode": str(spec.request_config["markdownMode"]),
+            },
         )
     else:  # pragma: no cover
         raise KeyError(vendor_key)
