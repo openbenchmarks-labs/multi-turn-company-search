@@ -297,6 +297,15 @@ provider keys selected with `--vendors`. Useful controls include `--trials`,
 `--query-offset`, `--query-limit`, `--vendor-concurrency`, `--trial-concurrency`,
 `--max-turns`, `--max-searches`, and `--max-fetches`.
 
+Context.dev is available with `--vendors context` in both research modes.
+Set `CONTEXT_API_KEY`; search requests Highlights with `maxCharacters=4000`,
+matching the shared snippet cap, with descriptions as a fallback. Native fetch returns main-content
+Markdown under the shared page cap. Requests retain Context's default cache
+policy. Costs use returned credit usage at the Developer top-up rate of $2.20
+per 1,000 credits, verified 2026-10-20, excluding the subscription. Highlights
+search (10 results) uses two credits; standard Markdown fetch uses one. Missing usage
+stays unknown. Leaderboard results are pending.
+
 A valid input uses the `company-research-dataset-v1` contract:
 
 ```text

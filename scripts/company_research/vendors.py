@@ -66,7 +66,17 @@ class VendorCall:
     page: dict[str, Any] | None = None
 
 
+CONTEXT_USD_PER_CREDIT = 0.0022
+
+
 VENDORS: dict[str, VendorSpec] = {
+    # Developer top-up: $2.20 / 1,000 credits, checked 2026-10-20.
+    # https://www.context.dev/pricing; two credits / 10 results with Highlights, one / Markdown scrape.
+    "context": VendorSpec(
+        "context", "context", "Context.dev", "context", "POST /v1/web/search",
+        ("CONTEXT_API_KEY",), 2 * CONTEXT_USD_PER_CREDIT, True, "GET /v1/web/scrape/markdown", "context_markdown",
+        {"highlightsOptions": {"enabled": True, "maxCharacters": 4000}}, fetch_unit_cost_usd=CONTEXT_USD_PER_CREDIT,
+    ),
     "brave": VendorSpec(
         "brave", "brave-search", "Brave Search", "brave", "GET /res/v1/web/search",
         ("BRAVE_SEARCH_API_KEY",), 0.005, False, None, None,
@@ -348,7 +358,13 @@ def _parse_hits(vendor_key: str, payload: Any, max_results: int) -> list[dict[st
     hits: list[dict[str, Any]] = []
     if vendor_key.startswith("nimble_"):
         return _dedupe([_hit(h["url"], h["title"], h["snippet"]) for h in nimble.search_hits(payload, max_results)], max_results)
-    if vendor_key.startswith("parallel_"):
+    if vendor_key == "context":
+        for item in payload.get("results") or []:
+            highlights = item.get("highlights") or {}
+            parts = highlights.get("highlights") or []
+            snippet = "\n".join(part for part in parts if isinstance(part, str)) if highlights.get("code") == "SUCCESS" else ""
+            hits.append(_hit(item.get("url"), item.get("title"), snippet.strip() or item.get("description")))
+    elif vendor_key.startswith("parallel_"):
         for item in payload.get("results") or []:
             excerpts = item.get("excerpts") or []
             hits.append(_hit(item.get("url"), item.get("title"), "\n".join(x for x in excerpts if isinstance(x, str))))
@@ -411,7 +427,13 @@ def search(
     search_context_size: str | None = None,
 ) -> VendorCall:
     spec = VENDORS[vendor_key]
-    if vendor_key.startswith("nimble_"):
+    if vendor_key == "context":
+        call = _request(
+            method="POST", url="https://api.context.dev/v1/web/search",
+            headers={"Authorization": f"Bearer {os.environ['CONTEXT_API_KEY']}", "Content-Type": "application/json"},
+            body={**spec.request_config, "query": query, "numResults": max(10, min(max_results, 100))},
+        )
+    elif vendor_key.startswith("nimble_"):
         call = _request(
             method="POST", url=nimble.SEARCH_URL,
             headers={"Authorization": f"Bearer {os.environ['NIMBLE_API_KEY']}", "Content-Type": "application/json"},
@@ -519,6 +541,10 @@ def search(
     call.cost_usd = (
         reported_cost if reported_cost is not None else spec.search_unit_cost_usd
     ) if call.status == "ok" else 0.0
+    if vendor_key == "context":
+        payload = call.raw_response if isinstance(call.raw_response, dict) else {}
+        credits = (payload.get("key_metadata") or {}).get("credits_consumed")
+        call.cost_usd = credits * CONTEXT_USD_PER_CREDIT if isinstance(credits, (int, float)) else None
     call.hits = _parse_hits(vendor_key, call.raw_response, max_results) if call.status == "ok" else []
     return call
 
@@ -539,7 +565,13 @@ def _page(vendor_key: str, url: str, payload: Any, max_chars: int) -> dict[str, 
     payload = payload if isinstance(payload, dict) else {}
     if vendor_key.startswith("nimble_"):
         return nimble.extract_page(payload, url, max_chars)
-    if vendor_key.startswith("parallel_"):
+    if vendor_key == "context":
+        if payload.get("success") is not True:
+            raise RuntimeError("context native fetch failed")
+        metadata = payload.get("metadata") or {}
+        text = payload.get("markdown") or ""
+        final_url, title = metadata.get("finalUrl") or payload.get("url") or url, metadata.get("title") or ""
+    elif vendor_key.startswith("parallel_"):
         item = (payload.get("results") or [{}])[0]
         text = item.get("full_content") or "\n".join(item.get("excerpts") or [])
         final_url, title = item.get("url") or url, item.get("title") or ""
@@ -605,7 +637,13 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
             attempts=[], cost_usd=None,
         )
     _assert_public_url(url)
-    if vendor_key.startswith("nimble_"):
+    if vendor_key == "context":
+        call = _request(
+            method="GET", url="https://api.context.dev/v1/web/scrape/markdown",
+            headers={"Authorization": f"Bearer {os.environ['CONTEXT_API_KEY']}"},
+            params={"url": url, "useMainContentOnly": "true"}, timeout=120,
+        )
+    elif vendor_key.startswith("nimble_"):
         nimble.extract_price()  # Validate an optional rate before issuing the call.
         call = _request(
             method="POST", url=nimble.EXTRACT_URL,
@@ -668,4 +706,8 @@ def fetch(vendor_key: str, url: str, *, objective: str, max_chars: int = 12_000)
     call.cost_usd = (
         reported_cost if reported_cost is not None else spec.effective_fetch_unit_cost_usd
     ) if call.status == "ok" else 0.0
+    if vendor_key == "context":
+        payload = call.raw_response if isinstance(call.raw_response, dict) else {}
+        credits = (payload.get("key_metadata") or {}).get("credits_consumed")
+        call.cost_usd = credits * CONTEXT_USD_PER_CREDIT if isinstance(credits, (int, float)) else None
     return call

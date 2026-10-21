@@ -181,7 +181,7 @@ class RunnerTest(unittest.TestCase):
         self.assertEqual(
             set(VENDORS),
             {
-                "nimble_lite", "nimble_standard", "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
+                "context", "nimble_lite", "nimble_standard", "brave", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
                 "linkup_standard", "parallel_advanced", "parallel_basic",
                 "parallel_fast", "parallel_turbo", "seltz_companies", "serp",
                 "tavily_advanced", "tavily_basic", "you_highlights", "you_highlights_core", "tinyfish", "perplexity",
@@ -189,7 +189,7 @@ class RunnerTest(unittest.TestCase):
         )
         capabilities = {row["vendor"]: row for row in capability_inventory()}
         for key in (
-            "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
+            "context", "exa_deep", "exa_instant", "firecrawl", "linkup_fast",
             "linkup_standard", "parallel_advanced", "parallel_basic",
             "parallel_fast", "parallel_turbo", "tavily_advanced", "tavily_basic", "you_highlights", "you_highlights_core", "tinyfish",
         ):
@@ -205,6 +205,8 @@ class RunnerTest(unittest.TestCase):
 
     def test_every_vendor_response_shape_produces_ranked_hits(self) -> None:
         fixtures = {
+            "context": {"results": [{"url": "https://a.test", "title": "A", "description": "fallback",
+                                      "highlights": {"code": "SUCCESS", "highlights": ["one"]}}]},
             "brave": {"web": {"results": [{"url": "https://a.test", "title": "A", "description": "one"}]}},
             "exa_deep": {"results": [{"url": "https://a.test", "title": "A", "highlights": ["one"]}]},
             "exa_instant": {"results": [{"url": "https://a.test", "title": "A", "highlights": ["one"]}]},
@@ -230,6 +232,8 @@ class RunnerTest(unittest.TestCase):
         for vendor, payload in fixtures.items():
             with self.subTest(vendor=vendor):
                 self.assertEqual(_parse_hits(vendor, payload, 10)[0]["url"], "https://a.test")
+                if vendor == "context":
+                    self.assertEqual(_parse_hits(vendor, payload, 10)[0]["snippet"], "one")
 
     def test_public_board_search_request_contracts(self) -> None:
         fixtures = {
