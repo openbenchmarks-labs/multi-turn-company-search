@@ -306,6 +306,16 @@ per 1,000 credits, verified 2026-10-20, excluding the subscription. Highlights
 search (10 results) uses two credits; standard Markdown fetch uses one. Missing usage
 stays unknown. Leaderboard results are pending.
 
+String Web Access is available with `--vendors string` in both research modes.
+Set `STRING_API_KEY`; search sends the query unchanged to `POST /v1/search` with
+`engine=google` and keeps the first results page, trimmed to the shared result
+count. Native fetch calls `POST /v1/fetch` with `format=markdown` and
+`markdownMode=readable`, which drops navigation and other boilerplate before the
+shared page cap applies, and fails the call when the destination returns a
+non-2xx status. Costs use the Starter list prices, verified 2026-10-26: $1.50
+per 1,000 searches and $0.30 per 1,000 fetches at the request-based rate.
+Leaderboard results are pending.
+
 A valid input uses the `company-research-dataset-v1` contract:
 
 ```text
