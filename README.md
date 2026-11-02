@@ -190,6 +190,7 @@ confidence interval.
 | Brave Search | Brave web search                                                          |
 | Exa          | Deep, Instant                                                             |
 | Firecrawl    | Search                                                                    |
+| Keenable     | Pro; native fetch (indexed copy); results pending                         |
 | Linkup       | Fast, Standard                                                            |
 | Nimble       | Lite, Standard                                                            |
 | Parallel     | Turbo, Fast, Basic, Advanced                                              |
@@ -305,6 +306,16 @@ policy. Costs use returned credit usage at the Developer top-up rate of $2.20
 per 1,000 credits, verified 2026-10-20, excluding the subscription. Highlights
 search (10 results) uses two credits; standard Markdown fetch uses one. Missing usage
 stays unknown. Leaderboard results are pending.
+
+Keenable is available with `--vendors keenable` in both research modes, using
+`KEENABLE_API_KEY`. Search calls `POST /v1/search` with `mode=pro` sent
+explicitly, 10 results, and `snippet_max_length=4000`, matching the shared snippet cap; the snippet is the
+evidence text, with the description as a fallback. Native fetch returns Keenable's
+indexed copy of the page (`GET /v1/fetch` with `live=false`) under the shared page
+cap; a 404 or empty page is a failed fetch, like any other vendor's. Costs use the
+list price of $4 per 1,000 requests ($0.004 per search or fetch, keenable.ai/pricing,
+checked 2026-11-02), scaled by returned `usage.credits` when present. No scored run
+yet; leaderboard results are pending.
 
 A valid input uses the `company-research-dataset-v1` contract:
 
